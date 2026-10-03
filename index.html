@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chat prototype</title>
+<style>
+:root{--bg:#fafaf9;--panel:#fff;--text:#1c1917;--muted:#78716c;--line:#e7e5e4;--accent:#1c1917;--accent-text:#fff;--user:#1c1917;--user-text:#fff;--ai:#f5f5f4;--err:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#121110;--panel:#1a1816;--text:#f5f5f4;--muted:#a8a29e;--line:#2b2825;--accent:#f5f5f4;--accent-text:#1c1917;--user:#f5f5f4;--user-text:#1c1917;--ai:#242120;--err:#f87171}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;justify-content:center;padding-top:env(safe-area-inset-top,0)}
+.app{width:100%;max-width:720px;height:100%;display:flex;flex-direction:column;background:var(--panel);border-left:1px solid var(--line);border-right:1px solid var(--line)}
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--line)}
+header h1{font-size:15px;font-weight:600;margin:0}
+header small{display:block;color:var(--muted);font-weight:400;font-size:12px}
+.btn-ghost{background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+.btn-ghost:hover{background:var(--ai)}
+#chat{flex:1;overflow-y:auto;padding:20px 18px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
+.empty{margin:auto;text-align:center;color:var(--muted);max-width:340px}
+.empty h2{color:var(--text);font-size:18px;font-weight:600;margin:0 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:16px}
+.chip{border:1px solid var(--line);background:none;color:var(--text);border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+.chip:hover{background:var(--ai)}
+.msg{max-width:85%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--user);color:var(--user-text);border-bottom-right-radius:4px}
+.msg.ai{align-self:flex-start;background:var(--ai);border-bottom-left-radius:4px}
+.msg.error{align-self:flex-start;background:none;border:1px solid var(--err);color:var(--err);font-size:13px}
+.dots{display:inline-flex;gap:4px;padding:4px 0}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:b 1.2s infinite ease-in-out}
+.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+@keyframes b{0%,80%,100%{opacity:.3;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+form{display:flex;gap:8px;align-items:flex-end;padding:12px 18px calc(12px + env(safe-area-inset-bottom,0));border-top:1px solid var(--line)}
+textarea{flex:1;resize:none;max-height:140px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;font:inherit;background:var(--bg);color:var(--text);outline:none}
+textarea:focus{border-color:var(--muted)}
+#send{background:var(--accent);color:var(--accent-text);border:0;border-radius:12px;padding:10px 18px;font:inherit;font-weight:500;cursor:pointer}
+#send:disabled{opacity:.4;cursor:not-allowed}
+.hint{text-align:center;color:var(--muted);font-size:11px;padding:0 18px 8px}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Chat prototype<small id="modelLabel"></small></h1>
+    <button class="btn-ghost" id="clear" type="button">New chat</button>
+  </header>
+  <main id="chat" aria-live="polite"></main>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Type a message…" aria-label="Message"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+  <div class="hint">Prototype only. Responses may be inaccurate.</div>
+</div>
+
+<script>
+// ---------- CONFIG ----------
+// Default: Pollinations free endpoint, no API key needed.
+// If it ever requires a key, get a free one at https://enter.pollinations.ai and set it below,
+// then switch API_URL to "https://gen.pollinations.ai/v1/chat/completions".
+// NOTE: a key placed here is PUBLIC to anyone who opens the site. Test keys only.
+const CONFIG = {
+  API_URL: "https://text.pollinations.ai/openai",
+  API_KEY: "",
+  MODEL: "openai",
+  SYSTEM_PROMPT: "You are a helpful, concise assistant."
+};
+// ----------------------------
+
+const chat = document.getElementById("chat");
+const form = document.getElementById("form");
+const input = document.getElementById("input");
+const sendBtn = document.getElementById("send");
+document.getElementById("modelLabel").textContent = "Model: " + CONFIG.MODEL;
+
+let history = [];
+let busy = false;
+
+const suggestions = ["Explain how a transistor works", "Give me 3 project ideas", "Summarize quantum tunneling"];
+
+function renderEmpty() {
+  chat.innerHTML = "";
+  const d = document.createElement("div");
+  d.className = "empty";
+  d.innerHTML = "<h2>Start a conversation</h2><div>Ask anything to test the chatbot.</div>";
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  suggestions.forEach(s => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = s;
+    b.onclick = () => send(s);
+    chips.appendChild(b);
+  });
+  d.appendChild(chips);
+  chat.appendChild(d);
+}
+
+function addMsg(role, text) {
+  const empty = chat.querySelector(".empty");
+  if (empty) empty.remove();
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.textContent = text;
+  chat.appendChild(el);
+  scrollDown();
+  return el;
+}
+
+function scrollDown() { chat.scrollTop = chat.scrollHeight; }
+
+function setBusy(v) {
+  busy = v;
+  sendBtn.disabled = v;
+}
+
+async function send(text) {
+  text = (text || "").trim();
+  if (!text || busy) return;
+  addMsg("user", text);
+  history.push({ role: "user", content: text });
+  input.value = ""; autosize();
+  setBusy(true);
+
+  const typing = document.createElement("div");
+  typing.className = "msg ai";
+  typing.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+  chat.appendChild(typing); scrollDown();
+
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (CONFIG.API_KEY) headers["Authorization"] = "Bearer " + CONFIG.API_KEY;
+    const res = await fetch(CONFIG.API_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: CONFIG.MODEL,
+        messages: [{ role: "system", content: CONFIG.SYSTEM_PROMPT }, ...history]
+      })
+    });
+    if (res.status === 429) throw new Error("Rate limit reached. Wait about 15 seconds and try again.");
+    if (res.status === 401 || res.status === 403) throw new Error("This endpoint needs an API key. See the CONFIG block in index.html.");
+    if (!res.ok) throw new Error("Request failed (" + res.status + "). Please try again.");
+    const data = await res.json();
+    const reply = data?.choices?.[0]?.message?.content?.trim();
+    if (!reply) throw new Error("The model returned an empty response.");
+    typing.remove();
+    addMsg("ai", reply);
+    history.push({ role: "assistant", content: reply });
+  } catch (err) {
+    typing.remove();
+    history.pop(); // let the user resend
+    const msg = err instanceof TypeError ? "Network error. Check your connection and try again." : err.message;
+    addMsg("error", msg);
+  } finally {
+    setBusy(false);
+    input.focus();
+  }
+}
+
+function autosize() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 140) + "px";
+}
+
+form.addEventListener("submit", e => { e.preventDefault(); send(input.value); });
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(input.value); }
+});
+document.getElementById("clear").addEventListener("click", () => {
+  if (busy) return;
+  history = []; renderEmpty(); input.focus();
+});
+
+renderEmpty();
+</script>
+</body>
+</html>
